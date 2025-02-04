@@ -42,6 +42,8 @@
 #include "bms.h"
 #include "events.h"
 
+#define ADC_IND_TEMP_MOTOR	11 // SUPERMILEAGE WOOOO
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -63,6 +65,8 @@ typedef struct {
 	unsigned int m_cycles_running;
 	bool m_lock_enabled;
 	bool m_lock_override_once;
+	systime_t m_tacho_dt;			// 2 ne values in struct for our tachometer
+	float m_motor_current_rel;		//
 	float m_motor_current_sum;
 	float m_input_current_sum;
 	float m_motor_current_iterations;
@@ -717,6 +721,8 @@ void mc_interface_set_current_rel(float val) {
 		SHUTDOWN_RESET();
 	}
 
+	motor_now()->m_motor_current_rel = val; // ADDED THIS HERE IDK THO SUPERMILEAGE
+
 	volatile mc_configuration *cfg = &motor_now()->m_conf;
 	float duty = mc_interface_get_duty_cycle_now();
 
@@ -729,6 +735,16 @@ void mc_interface_set_current_rel(float val) {
 	if (fabsf(val * cfg->l_abs_current_max) > cfg->cc_min_current) {
 		mc_interface_set_current_off_delay(0.1);
 	}
+}
+
+/**
+ * Get current relative to the minimum and maximum current limits.
+ * ADDED THIS HERE TOOO
+ * @return current
+ * The relative current value, range [-1.0 1.0]
+ */
+float mc_interface_get_current_rel () {
+	return motor_now()->m_motor_current_rel;
 }
 
 /**
@@ -1039,6 +1055,13 @@ float mc_interface_get_sampling_frequency_now(void) {
 	}
 
 	return ret;
+}
+
+// ADDED THIS HERE SUPERMILEAGE
+float mc_interface_get_tacho_rpm(void) 
+{
+	if (m_motor_1.m_tacho_dt == 0) return 0.0;
+	return 10 * CH_CFG_ST_FREQUENCY / (m_motor_1.m_tacho_dt);
 }
 
 float mc_interface_get_rpm(void) {
@@ -2212,6 +2235,10 @@ static void update_override_limits(volatile motor_if_state_t *motor, volatile mc
 
 	const float v_in = motor->m_input_voltage_filtered;
 	float rpm_now = 0.0;
+	// ADDED THIS HERE SUPERMILEAGE
+	static float temp_motor_old = 0.0;
+	static bool rpm_triggered = 0;
+	static systime_t rpm_time = 0;
 
 	if (motor->m_conf.motor_type == MOTOR_TYPE_FOC) {
 		// Low latency is important for avoiding oscillations
@@ -2234,7 +2261,41 @@ static void update_override_limits(volatile motor_if_state_t *motor, volatile mc
 
 	switch(conf->m_motor_temp_sens_type) {
 	case TEMP_SENSOR_NTC_10K_25C:
-		temp_motor = is_motor_1 ? NTC_TEMP_MOTOR(conf->m_ntc_motor_beta) : NTC_TEMP_MOTOR_2(conf->m_ntc_motor_beta);
+	// ADDED THIS HERE SUPERMILEAGE. At this point idk what is going on here, so im just copying and pasting
+		// temp_motor = is_motor_1 ? NTC_TEMP_MOTOR(conf->m_ntc_motor_beta) : NTC_TEMP_MOTOR_2(conf->m_ntc_motor_beta);
+		{
+			int dt = chVTTimeElapsedSinceX (rpm_time);
+
+			// Tacho reset on timeout
+			if ( dt > CH_CFG_ST_FREQUENCY ) motor->m_tacho_dt = 0;
+
+			// Check for speed interrupt
+			if ( ADC_VOLTS(ADC_IND_TEMP_MOTOR) > 0.4 )
+			{
+
+				rpm_triggered = 0;
+				// Make sure time has passed since trigger
+				if ( dt > 150 )
+				{
+					temp_motor = is_motor_1 ? NTC_TEMP_MOTOR(conf->m_ntc_motor_beta) : NTC_TEMP_MOTOR_2(conf->m_ntc_motor_beta);
+					temp_motor_old = temp_motor;
+				} else {
+					temp_motor = temp_motor_old;
+				}
+			} else {
+				// Check For Negedge
+				if (rpm_triggered == 0)
+				{
+					systime_t rpm_time_new = chVTGetSystemTime();
+					motor->m_tacho_dt = dt;
+					// motor->m_tacho_dt = rpm_time_new - rpm_time;
+					// 10 / (CH_CFG_ST_FREQUENCY * ( rpm_time_new - rpm_time ));
+					rpm_time = rpm_time_new;
+				} 
+				rpm_triggered = 1;
+				temp_motor = temp_motor_old;
+			}
+		}
 		break;
 
 	case TEMP_SENSOR_NTC_100K_25C:

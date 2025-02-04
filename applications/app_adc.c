@@ -161,6 +161,13 @@ bool app_adc_range_ok(void) {
 	return range_ok;
 }
 
+// LMFAOOOO SUPERMILEAGE WTH EVEN IS THIS
+float calc_efficient_power()
+{
+	//float rpm = mc_interface_get_rpm();
+	return 0.5;
+}
+
 static THD_FUNCTION(adc_thread, arg) {
 	(void)arg;
 
